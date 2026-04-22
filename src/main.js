@@ -14,8 +14,8 @@ const messageEl = document.querySelector("#message");
 const damageVignette = document.querySelector("#damage-vignette");
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x05070a);
-scene.fog = new THREE.FogExp2(0x071018, 0.028);
+scene.background = new THREE.Color(0x101a22);
+scene.fog = new THREE.FogExp2(0x172c3a, 0.016);
 
 const camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.1, 260);
 camera.position.set(0, 2.0, 12);
@@ -31,11 +31,11 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.08;
+renderer.toneMappingExposure = 1.45;
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.6, 0.12);
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.36, 0.38, 0.2);
 composer.addPass(bloom);
 
 const clock = new THREE.Clock();
@@ -63,20 +63,22 @@ let isGameOver = false;
 let nextSpawnTimer = 0;
 
 const MAX_AMMO = 24;
-const PLAYER_SPEED = 15;
-const SPRINT_MULTIPLIER = 1.55;
+const PLAYER_SPEED = 18.5;
+const SPRINT_MULTIPLIER = 1.62;
 const PLAYER_RADIUS = 0.72;
+const MOUSE_SENSITIVITY = 0.0032;
+const SHOT_DAMAGE = 130;
 
 const materials = {
   floor: new THREE.MeshStandardMaterial({
-    color: 0x111820,
+    color: 0x263948,
     metalness: 0.55,
-    roughness: 0.34,
+    roughness: 0.28,
   }),
   wall: new THREE.MeshStandardMaterial({
-    color: 0x172331,
-    metalness: 0.48,
-    roughness: 0.38,
+    color: 0x2a3d4d,
+    metalness: 0.4,
+    roughness: 0.34,
   }),
   trim: new THREE.MeshStandardMaterial({
     color: 0x88f2ff,
@@ -115,11 +117,14 @@ function buildArena() {
   grid.material.opacity = 0.34;
   scene.add(grid);
 
-  const ambient = new THREE.HemisphereLight(0x9ee9ff, 0x161114, 0.68);
+  const ambient = new THREE.HemisphereLight(0xdff9ff, 0x4f5b65, 1.55);
   scene.add(ambient);
 
-  const sun = new THREE.DirectionalLight(0xe8fbff, 2.7);
-  sun.position.set(-22, 34, 18);
+  const fill = new THREE.AmbientLight(0xbdd8ff, 0.48);
+  scene.add(fill);
+
+  const sun = new THREE.DirectionalLight(0xf6fdff, 4.6);
+  sun.position.set(-18, 38, 24);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.camera.near = 1;
@@ -130,13 +135,17 @@ function buildArena() {
   sun.shadow.camera.bottom = -48;
   scene.add(sun);
 
-  const accentA = new THREE.PointLight(0x25e8ff, 35, 54, 1.7);
+  const accentA = new THREE.PointLight(0x25e8ff, 55, 70, 1.45);
   accentA.position.set(-28, 8, -26);
   scene.add(accentA);
 
-  const accentB = new THREE.PointLight(0xf7ff64, 22, 48, 1.9);
+  const accentB = new THREE.PointLight(0xf7ff64, 38, 64, 1.55);
   accentB.position.set(30, 9, 24);
   scene.add(accentB);
+
+  const arenaFill = new THREE.PointLight(0xffffff, 28, 86, 1.1);
+  arenaFill.position.set(0, 13, 0);
+  scene.add(arenaFill);
 
   addBoundary(0, 2.8, -46, 92, 5.6, 1.4);
   addBoundary(0, 2.8, 46, 92, 5.6, 1.4);
@@ -252,8 +261,9 @@ function createEnemy(x, z, tier = 1) {
 
   group.position.set(x, 1.35 + tier * 0.1, z);
   group.userData = {
-    health: 44 + tier * 18,
-    speed: 3.1 + tier * 0.22,
+    isEnemy: true,
+    health: 62 + tier * 18,
+    speed: 3.9 + tier * 0.28,
     damageCooldown: 0,
     hitRadius: size,
     tier,
@@ -289,16 +299,28 @@ function shoot() {
   raycaster.far = 96;
   const hits = raycaster.intersectObjects(enemies, true);
   const endPoint = origin.clone().add(direction.multiplyScalar(82));
+  let enemy = null;
 
   if (hits.length) {
-    const enemy = findEnemyRoot(hits[0].object);
+    enemy = findEnemyRoot(hits[0].object);
+    if (enemy) endPoint.copy(hits[0].point);
+  }
+
+  if (!enemy) {
+    enemy = findAssistedTarget(origin, direction);
     if (enemy) {
-      enemy.userData.health -= 34;
-      endPoint.copy(hits[0].point);
-      createImpact(hits[0].point, 0x9dfff4);
-      if (enemy.userData.health <= 0) {
-        destroyEnemy(enemy);
-      }
+      endPoint.copy(enemy.position);
+      endPoint.y += 0.2;
+    }
+  }
+
+  if (enemy) {
+    enemy.userData.health -= SHOT_DAMAGE;
+    createImpact(endPoint, 0x9dfff4);
+    if (enemy.userData.health <= 0) {
+      destroyEnemy(enemy);
+    } else {
+      enemy.scale.setScalar(1.12);
     }
   }
 
@@ -306,10 +328,37 @@ function shoot() {
   createMuzzleFlash();
 }
 
+function findAssistedTarget(origin, direction) {
+  let bestEnemy = null;
+  let bestDistance = Infinity;
+
+  for (const enemy of enemies) {
+    const target = enemy.position.clone();
+    target.y += 0.25;
+    const toEnemy = target.sub(origin);
+    const projected = toEnemy.dot(direction);
+    if (projected < 0 || projected > 88) continue;
+
+    const closestPoint = origin.clone().addScaledVector(direction, projected);
+    const missDistance = closestPoint.distanceTo(enemy.position);
+    const aimRadius = enemy.userData.hitRadius * 1.55;
+
+    if (missDistance <= aimRadius && projected < bestDistance) {
+      bestDistance = projected;
+      bestEnemy = enemy;
+    }
+  }
+
+  return bestEnemy;
+}
+
 function findEnemyRoot(object) {
   let current = object;
-  while (current && current.parent !== scene) current = current.parent;
-  return enemies.includes(current) ? current : null;
+  while (current) {
+    if (current.userData.isEnemy && enemies.includes(current)) return current;
+    current = current.parent;
+  }
+  return null;
 }
 
 function destroyEnemy(enemy) {
@@ -422,6 +471,7 @@ function updateEnemies(delta) {
     enemy.lookAt(camera.position.x, enemy.position.y, camera.position.z);
     enemy.rotation.z += delta * (1.6 + enemy.userData.tier * 0.2);
     enemy.position.y = 1.4 + Math.sin(clock.elapsedTime * 3 + enemy.id) * 0.18;
+    enemy.scale.lerp(tmpVec.set(1, 1, 1), 12 * delta);
 
     enemy.userData.damageCooldown -= delta;
     if (distance < 2.15 && enemy.userData.damageCooldown <= 0) {
@@ -564,8 +614,8 @@ canvas.addEventListener("click", () => {
 
 document.addEventListener("mousemove", (event) => {
   if (!locked) return;
-  yaw -= event.movementX * 0.0022;
-  pitch -= event.movementY * 0.0022;
+  yaw -= event.movementX * MOUSE_SENSITIVITY;
+  pitch -= event.movementY * MOUSE_SENSITIVITY;
   pitch = THREE.MathUtils.clamp(pitch, -1.34, 1.22);
 });
 
